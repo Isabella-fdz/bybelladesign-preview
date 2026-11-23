@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Case Pillars · en vivo</title>
+<meta name="robots" content="noindex">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@300;400;700&display=swap">
+<style>
+/* Case Pillars (2C, ripple), portado de categories-section.module.css de when-justice (origin/main, PR #743).
+   Las reglas de escritorio (≥1280 px) van bajo .d en vez de un media query: el escenario se dibuja a 1280 px
+   y se escala al ancho del iframe. Tipografía sustituta de PP Telegraf (Hanken Grotesk). */
+:root{--primary-background-color:#d7cfcb;--primary-text-color:#000;--inverse-text-color:#fff;--some-border-color:#a39a91;
+  --overlay-black-50:rgba(0,0,0,.5);--overlay-black-75:rgba(0,0,0,.75);--overlay-white-75:rgba(255,255,255,.75);
+  --space-3:12px;--space-6:24px;--sans:"Hanken Grotesk",Arial,sans-serif}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden;background:var(--primary-background-color);font-family:var(--sans);color:#000}
+button{font:inherit;background:none;border:0;margin:0;padding:0}
+.stage{position:absolute;left:0;top:0;transform-origin:0 0}
+.head{display:flex;align-items:center;height:76px;padding:0 24px;border-top:1px solid var(--some-border-color)}
+.head h2{margin:0;font-weight:300;font-size:32px;letter-spacing:-.01em}
+.d .head{height:120px;padding:0 40px}.d .head h2{font-size:40px}
+
+.root{--ease:cubic-bezier(0.22,1,0.36,1);position:relative;background:var(--primary-background-color);border-top:1px solid var(--some-border-color);border-bottom:1px solid var(--some-border-color)}
+.strips{display:flex;flex-direction:column}
+.strip{position:relative;overflow:hidden;height:64px;background:var(--pillar);border-bottom:1px solid var(--primary-text-color);transition:height .7s var(--ease)}
+.strip:last-child{border-bottom:none}
+.strip-active{height:340px}
+.media{position:absolute;inset:0;z-index:1;opacity:0;transition:opacity .5s ease}
+.strip-active .media{opacity:1}
+.photo{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;transform:scale(1.08);transition:transform 1.2s var(--ease)}
+.strip-active .photo{transform:scale(1)}
+.shade{position:absolute;inset:0;background:linear-gradient(180deg,var(--overlay-black-50) 0%,transparent 28%,transparent 38%,var(--overlay-black-75) 100%)}
+.strip{--ico:36px;--ox:42px;--oy:32px;--reach:460px;--ripple-ease:cubic-bezier(0.4,0,0.25,1)}
+.media{opacity:1;clip-path:circle(0px at var(--ox) var(--oy));transition:none}
+.strip-active .media{animation:spread 1.1s var(--ripple-ease) .15s both}
+@keyframes spread{from{clip-path:circle(0px at var(--ox) var(--oy))}to{clip-path:circle(var(--reach) at var(--ox) var(--oy))}}
+.ripple{position:absolute;left:var(--ox);top:var(--oy);z-index:3;width:0;height:0;pointer-events:none}
+.ring{position:absolute;left:0;top:0;width:calc(var(--reach)*2);height:calc(var(--reach)*2);border-radius:50%;border:2px solid var(--overlay-white-75);transform:translate(-50%,-50%) scale(0);animation:ring 1.1s var(--ripple-ease) .15s both}
+.ring:nth-child(3){border-width:1px;animation-delay:.3s}
+.ring:nth-child(4){border-width:1px;animation-delay:.45s}
+@keyframes ring{0%{transform:translate(-50%,-50%) scale(0);opacity:1}80%{opacity:.9}100%{transform:translate(-50%,-50%) scale(1);opacity:0}}
+.drop{position:absolute;left:0;top:0;width:var(--ico);height:var(--ico);border-radius:50%;overflow:hidden;color:var(--primary-text-color);background:var(--icon-rest);transform:translate(-50%,-50%);animation:drop .55s ease-in-out both}
+@keyframes drop{0%{transform:translate(-50%,-50%) scale(1);filter:blur(0);opacity:1}30%{transform:translate(-50%,-50%) scale(.82);filter:blur(0);opacity:1}100%{transform:translate(-50%,-50%) scale(1.9);filter:blur(5px);opacity:0}}
+.strip-active .tab>*,.strip-active .words{animation:rise .5s cubic-bezier(0.22,1,0.36,1) .8s both}
+.strip-active .panel{animation-delay:.9s}
+.tab{position:relative;z-index:2;display:flex;align-items:center;gap:16px;width:100%;height:64px;padding:0 24px;text-align:left;color:var(--primary-text-color);cursor:pointer;transition:color .3s ease .2s}
+.tab:focus-visible{outline:2px solid var(--primary-text-color);outline-offset:-4px}
+.strip-active .tab{color:var(--inverse-text-color)}
+.name{display:flex;align-items:center;gap:12px}
+.icon{width:36px;height:36px;border-radius:50%;overflow:hidden;flex-shrink:0;color:var(--primary-text-color);background:var(--icon-rest)}
+.icon svg,.drop svg{display:block;width:100%;height:100%}
+.strip{--icon-rest:var(--primary-background-color);--icon-size:36px;--icon-line:calc(var(--icon-size)*1.42857/80)}
+.strip:not(.strip-active) .icon,.drop{box-shadow:inset 0 0 0 var(--icon-line) var(--primary-text-color)}
+.strip-active .icon{background:var(--primary-background-color)}
+.panel{position:absolute;z-index:2;inset:auto 0 0 0;padding:24px;color:var(--inverse-text-color);animation:rise .6s var(--ease) .35s both}
+.panel[hidden]{display:none}
+.words{font-size:24px;line-height:140%;font-weight:300}.words b{font-weight:700}
+.description{max-width:22ch;margin:0;font-size:20px;line-height:120%;font-weight:700}
+@keyframes rise{from{opacity:0;transform:translateY(24px)}to{opacity:1;transform:none}}
+
+/* ≥1280 px del componente real */
+.d .strips{flex-direction:row;height:588px}
+.d .strip,.d .strip-active{height:auto;flex:1 1 0;min-width:0;border-bottom:none;border-right:1px solid var(--primary-text-color);transition:flex-grow .8s var(--ease)}
+.d .strip:last-child{border-right:none}
+.d .strip{--ico:44px;--ox:34px;--oy:calc(100% - 125px);--reach:560px;--icon-size:44px}
+.d .strip-active{flex-grow:2}
+.d .tab{position:absolute;inset:0;height:auto;flex-direction:column;align-items:flex-start;justify-content:flex-end;padding:var(--space-6) var(--space-3)}
+.d .name{flex-direction:column;align-items:flex-start;gap:12px}
+.d .words{display:flex;flex-direction:column;white-space:nowrap}
+.d .icon{width:44px;height:44px}
+.d .strip-active .tab{align-items:flex-start;justify-content:flex-start;gap:24px;padding:32px 40px}
+.d .strip-active .name{flex-direction:row;align-items:center;gap:16px}
+.d .strip-active .words{flex-direction:column;animation:rise .6s var(--ease) .25s both}
+.d .panel{inset:auto 0 0 0;padding:0 40px 40px}
+.d .description{font-size:24px}
+
+@media (prefers-reduced-motion:reduce){
+  .strip,.media,.photo{transition:none!important}
+  .strip-active .media{animation:none;clip-path:none}
+  .ripple{display:none}
+  .strip-active .tab>*,.strip-active .words,.panel{animation:none!important}
+}
+</style>
+</head>
+<body>
+<div class="stage" id="stage">
+  <div class="head"><h2>Case Pillars</h2></div>
+  <section class="root" aria-label="Case pillars">
+    <div class="strips" id="strips" role="tablist" aria-label="Case pillars"></div>
+  </section>
+</div>
+<script>
+/* Datos de src/lib/constants/pillars.ts y colores de CATEGORY_COLORS (when-justice, origin/main) */
+const LEAD = "We challenge those who cause harm to";
+const PILLARS = [
+  { key: "drink", label: "What We DRINK", color: "#547DA0", description: "keep water sources free from toxins", alt: "Hand holding glass under running faucet." },
+  { key: "breathe", label: "What We BREATHE", color: "#7CC8D0", description: "reduce emissions and pollutants in the air", alt: "Basketball hoop against backdrop of trees, mountains, and clouds in sky." },
+  { key: "eat", label: "What We EAT", color: "#B9D31D", description: "minimize chemicals from ground to plate", alt: "Stacked rows of green apples." },
+  { key: "neighbor", label: "What We NEIGHBOR", color: "#6A810A", description: "align development with natural habitats", alt: "Bird's-eye view of rows of rooftops nestled amongst trees." },
+  { key: "discard", label: "What We DISCARD", color: "#97623A", description: "limit contamination and cut excess waste", alt: "Pile of empty, cardboard boxes." },
+  { key: "buy", label: "What We BUY", color: "#E97B30", description: "address unsafe or misleading products", alt: "Empty shopping carts in return bay within parking lot." },
+  { key: "utilize", label: "What We UTILIZE", color: "#C49101", description: "end depletive energy & power practices", alt: "Coiled data cables plugged into server." },
+];
+/* CategoryIcon (src/components/category-icon) */
+const icon = (c, id) => `<svg viewBox="0 0 80 81" fill="none" aria-hidden="true"><g clip-path="url(#ci${id})"><circle cx="40" cy="50.5" r="19.2857" fill="${c}" stroke="currentColor" stroke-width="1.42857"/><circle cx="40" cy="30.5" r="19.2857" fill="none" stroke="currentColor" stroke-width="1.42857"/></g><defs><clipPath id="ci${id}"><rect y="0.5" width="80" height="80" rx="40" fill="currentColor"/></clipPath></defs></svg>`;
+
+const stage = document.getElementById("stage"), strips = document.getElementById("strips");
+const RM = matchMedia("(prefers-reduced-motion: reduce)").matches;
+let active = 0, scale = 1, uid = 0;
+
+strips.innerHTML = PILLARS.map((p, i) => {
+  const w = p.label.split(" ");
+  return `<div class="strip${i === 0 ? " strip-active" : ""}" data-strip style="--pillar:${p.color};--i:${i}">
+    <div class="media"><img class="photo" src="img/${p.key}.webp" alt="${p.alt}" decoding="async"><div class="shade" aria-hidden="true"></div></div>
+    <button type="button" class="tab" role="tab" id="tab-${i}" aria-selected="${i === 0}" aria-controls="panel-${i}" tabindex="${i === 0 ? 0 : -1}">
+      <span class="name"><span class="icon" data-strip-icon aria-hidden="true">${icon(p.color, uid++)}</span>
+      <span class="words"><span>${w.slice(0, 2).join(" ")}</span> <b>${w.slice(2).join(" ")}</b></span></span>
+    </button>
+    <div class="panel" id="panel-${i}" role="tabpanel" aria-labelledby="tab-${i}"${i === 0 ? "" : " hidden"}><p class="description">${LEAD} ${p.description}</p></div>
+  </div>`;
+}).join("");
+const els = [...strips.children];
+
+/* open(): igual que el componente, con el rect dividido por la escala del escenario */
+function open(index) {
+  if (index === active) return;
+  const strip = els[index], ic = strip.querySelector("[data-strip-icon]");
+  const s = strip.getBoundingClientRect(), r = ic.getBoundingClientRect();
+  strip.style.setProperty("--ox", `${(r.left - s.left + r.width / 2) / scale}px`);
+  strip.style.setProperty("--oy", `${(r.top - s.top + r.height / 2) / scale}px`);
+  const prev = els[active];
+  prev.classList.remove("strip-active"); prev.querySelector(".ripple")?.remove();
+  prev.querySelector(".tab").setAttribute("aria-selected", "false"); prev.querySelector(".tab").tabIndex = -1; prev.querySelector(".panel").hidden = true;
+  strip.classList.add("strip-active");
+  strip.querySelector(".tab").setAttribute("aria-selected", "true"); strip.querySelector(".tab").tabIndex = 0; strip.querySelector(".panel").hidden = false;
+  const rp = document.createElement("span"); rp.className = "ripple"; rp.setAttribute("aria-hidden", "true");
+  rp.innerHTML = `<span class="drop">${icon(PILLARS[index].color, uid++)}</span><span class="ring"></span><span class="ring"></span><span class="ring"></span>`;
+  strip.insertBefore(rp, strip.querySelector(".panel"));
+  active = index;
+}
+
+/* hover con 90 ms de espera, clic y flechas, como en el sitio */
+let hoverTimer, auto, user = false;
+const stopAuto = () => { user = true; clearInterval(auto); };
+els.forEach((el, i) => {
+  el.addEventListener("pointerenter", (e) => { if (e.pointerType !== "mouse") return; stopAuto(); clearTimeout(hoverTimer); hoverTimer = setTimeout(() => open(i), 90); });
+  const tab = el.querySelector(".tab");
+  tab.addEventListener("click", () => { stopAuto(); open(i); });
+  tab.addEventListener("keydown", (e) => {
+    const last = els.length - 1;
+    const n = ["ArrowRight", "ArrowDown"].includes(e.key) ? (i === last ? 0 : i + 1) : ["ArrowLeft", "ArrowUp"].includes(e.key) ? (i === 0 ? last : i - 1) : null;
+    if (n === null) return; e.preventDefault(); stopAuto(); open(n); document.getElementById(`tab-${n}`).focus();
+  });
+});
+strips.addEventListener("pointerleave", () => clearTimeout(hoverTimer));
+
+/* Escritorio: el escenario a 1280 px escalado al iframe. Móvil: el diseño apilado a su tamaño real. */
+function fit() {
+  const W = innerWidth;
+  const desk = W >= 640;
+  document.body.classList.toggle("d", desk);
+  const base = desk ? 1280 : W;
+  scale = W / base;
+  stage.style.width = base + "px";
+  stage.style.transform = `scale(${scale})`;
+}
+addEventListener("resize", fit); fit();
+
+/* Recorrido solo mientras se ve y hasta que la persona interactúa */
+const step = () => open((active + 1) % els.length);
+if (!RM) new IntersectionObserver(([e]) => {
+  clearInterval(auto);
+  if (e.isIntersecting && !user) auto = setInterval(step, 2600);
+}, { threshold: 0.4 }).observe(stage);
+</script>
+</body>
+</html>

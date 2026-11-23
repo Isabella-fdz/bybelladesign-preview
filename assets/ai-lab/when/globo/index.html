@@ -1,0 +1,1029 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Earthlings · globo en vivo</title>
+<meta name="robots" content="noindex">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;700&display=swap">
+<style>
+/* Fondo beige de WHEN (#D7CFCB); etiquetas copiadas de donor-globe.module.css vía el artifact */
+:root{--bg:#d7cfcb;--p:#e1dedb;--brand:#ff3c00;--weak:#534d46;--black60:rgba(0,0,0,.6);--sans:"Hanken Grotesk",Arial,sans-serif}
+html,body{margin:0;height:100%;background:var(--bg);overflow:hidden;font-family:var(--sans);color:#000}
+.stage{position:absolute;inset:0}
+.g{position:absolute;inset:0;z-index:1}
+.g-root{position:absolute;inset:0;opacity:0;transition:opacity .3s}.g-root.ready{opacity:1}
+.g-canvas{position:absolute;inset:0;width:100%;height:100%;display:block;cursor:grab;touch-action:pan-y;-webkit-tap-highlight-color:transparent}
+.g-canvas:active{cursor:grabbing}
+.g-ov{position:absolute;inset:0;pointer-events:none;overflow:visible}
+.g-wave{fill:none;stroke:var(--brand);stroke-width:1.25;opacity:0}
+.tag{--rise:0px;--shift:0px;--ring:9px;--gap:9px;position:absolute;left:0;top:0;opacity:0;pointer-events:none;will-change:transform,opacity;z-index:3}
+.tag::before{content:"";position:absolute;left:calc(var(--ring)/-2);top:calc(var(--ring)/-2);width:var(--ring);height:var(--ring);border:1px solid var(--black60);border-radius:50%}
+.tag::after{content:"";position:absolute;left:-.5px;bottom:calc(var(--ring)/2);width:1px;height:calc(var(--gap) + var(--rise) - var(--ring)/2);background:var(--black60)}
+.tag .box{position:absolute;bottom:calc(var(--gap) + var(--rise));left:0;transform:translateX(calc(-50% + var(--shift)));display:flex;flex-direction:column;align-items:center;gap:2px;padding:3px 5px;white-space:nowrap;background:var(--p);border:1px solid var(--black60);color:#000}
+.tag .lb{font:700 10px/100% var(--sans)}
+.tag.compact{--ring:7px;--gap:7px}.tag.compact .box{padding:2px 4px}.tag.compact .lb{font-size:8px}
+.tag.sel .box{padding:5px 8px}.tag.sel .lb{font-size:12px}
+.tag .pl{font:400 12px/120% var(--sans);color:var(--weak)}
+/* el pin del thank-you: entra, gira 4 vueltas, se encoge y aterriza donde nace la ola */
+.flyer{position:absolute;left:0;top:0;z-index:4;opacity:0;pointer-events:none;transform-origin:50% 50%;will-change:transform,opacity}
+.coin{position:relative;width:100%;height:100%;transform-style:preserve-3d}
+.coin img{position:absolute;inset:0;display:block;width:100%;height:100%;backface-visibility:hidden;-webkit-backface-visibility:hidden}
+.coin img.back{transform:rotateY(180deg)}
+.ui{position:absolute;left:14px;right:14px;bottom:12px;z-index:5;display:flex;align-items:center;justify-content:space-between;gap:12px;pointer-events:none}
+.hint{font-size:12px;color:var(--weak)}
+.replay{pointer-events:auto;font:700 12px/1 var(--sans);letter-spacing:.04em;padding:9px 14px;border:1px solid #000;background:transparent;color:#000;cursor:pointer;border-radius:0}
+.replay:hover{background:var(--brand);color:#fff;border-color:var(--brand)}
+.replay:focus-visible{outline:2px solid #000;outline-offset:2px}
+</style>
+</head>
+<body>
+<div class="stage" id="stage">
+  <div class="g" id="g"></div>
+  <div class="flyer" id="flyer" aria-hidden="true"><div class="coin" id="coin"><img src="pin-face.svg" alt=""><img class="back" src="pin-face.svg" alt=""></div></div>
+  <div class="ui"><span class="hint" id="hint"></span><button class="replay" id="replay" type="button"></button></div>
+</div>
+<script type="module">
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js';
+const { BufferAttribute, BufferGeometry, DoubleSide, InstancedBufferAttribute, InstancedBufferGeometry, Matrix3, Mesh, OrthographicCamera, Points, Scene, ShaderMaterial, WebGLRenderer } = THREE;
+// ---- timeline.js (from when-justice @ juand/share-dialogs-figma, unmodified)
+/** The thank-you hero's choreography, in ms from the moment the pin drops in. */
+const TIMELINE = {
+    /** Pin finishes dropping in. */
+    pinIn: 700,
+    /** Pin starts spinning down into the background. */
+    pinShrink: 1100,
+    /** Globe starts forming behind it. */
+    globe: 1200,
+    /** Card fades in. */
+    card: 2700,
+    /** Pin becomes the wave's origin. */
+    land: 3400,
+    /** Everything has settled. */
+    end: 6000,
+};
+const clamp = (v, min = 0, max = 1) => Math.min(max, Math.max(min, v));
+const lerp = (a, b, k) => a + (b - a) * k;
+const easeOutCubic = (k) => 1 - Math.pow(1 - k, 3);
+const easeInCubic = (k) => k * k * k;
+const easeInQuad = (k) => k * k;
+const easeInOutCubic = (k) => k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
+/** The globe grows from 90% to full size while it forms. */
+const globeScaleAt = (t) => 0.9 + 0.1 * easeOutCubic(clamp((t - TIMELINE.globe) / 1800));
+
+// ---- globe/shaders.js (from when-justice @ juand/share-dialogs-figma, unmodified)
+// Projection is done by hand (orthographic, CSS px → NDC) so the globe can sit
+// anywhere in its canvas at any radius; three only supplies the GL plumbing.
+const PROJECT = /* glsl */ `
+  uniform mat3 uRot;
+  uniform vec2 uCenter;
+  uniform float uRadius;
+  uniform vec2 uViewport;
+
+  vec2 toScreen(vec3 p) {
+    return uCenter + vec2(p.x, -p.y) * uRadius;
+  }
+
+  vec4 toClip(vec2 s, float z) {
+    return vec4(s.x / uViewport.x * 2.0 - 1.0, 1.0 - s.y / uViewport.y * 2.0, z, 1.0);
+  }
+`;
+/** One instanced quad per coastline segment, expanded to a fixed CSS-px width. */
+const LINE_VERTEX = /* glsl */ `
+  attribute vec3 aStart;
+  attribute vec3 aEnd;
+  attribute vec2 aReveal;
+  uniform float uWidth;
+  uniform float uBackWidth;
+  uniform float uProgress;
+  varying float vFront;
+  ${PROJECT}
+
+  float easeInOutCubic(float k) {
+    return k < 0.5 ? 4.0 * k * k * k : 1.0 - pow(-2.0 * k + 2.0, 3.0) / 2.0;
+  }
+
+  void main() {
+    #ifdef LIMB
+      vec3 a = aStart;
+      vec3 b = aEnd;
+      float shown = uProgress;
+      vFront = 1.0;
+    #else
+      vec3 a = uRot * aStart;
+      vec3 b = uRot * aEnd;
+      // Each arc draws itself in, staggered by its group (aReveal.x).
+      float shown = easeInOutCubic(clamp((uProgress - aReveal.x) / 0.7, 0.0, 1.0));
+      vFront = step(0.0, a.z + b.z);
+    #endif
+    if (shown < aReveal.y) {
+      gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+      return;
+    }
+    vec2 sa = toScreen(a);
+    vec2 sb = toScreen(b);
+    vec2 d = sb - sa;
+    float len = length(d);
+    vec2 dir = len > 1e-4 ? d / len : vec2(1.0, 0.0);
+    vec2 normal = vec2(-dir.y, dir.x);
+    float halfWidth = mix(uBackWidth, uWidth, vFront) * 0.5;
+    vec2 s = mix(sa, sb, position.x)
+      + dir * (position.x * 2.0 - 1.0) * halfWidth
+      + normal * position.y * halfWidth;
+    // Front hemisphere is nearer, so it wins wherever it crosses the back.
+    gl_Position = toClip(s, -mix(a.z, b.z, position.x) * 0.5);
+  }
+`;
+const LINE_FRAGMENT = /* glsl */ `
+  uniform vec3 uFront;
+  uniform vec3 uBack;
+  uniform vec3 uBackground;
+  uniform float uOpacity;
+  varying float vFront;
+
+  void main() {
+    vec3 color = mix(uBack, uFront, vFront);
+    gl_FragColor = vec4(mix(uBackground, color, uOpacity), 1.0);
+  }
+`;
+/** Donor dots: pop-in, the orange wave and hover/selection all happen here. */
+const DOT_VERTEX = /* glsl */ `
+  attribute float aDelay;
+  attribute float aSize;
+  attribute float aIndex;
+  uniform float uPixelRatio;
+  uniform float uTime;
+  uniform float uWaveStart;
+  uniform vec2 uWaveOrigin;
+  uniform float uWaveSpeed;
+  uniform float uWaveLife;
+  uniform float uAllLit;
+  uniform float uDotScale;
+  uniform float uHover;
+  uniform float uSelected;
+  varying float vRadius;
+  varying float vSize;
+  varying float vLit;
+  varying float vAlpha;
+  varying float vStroke;
+  varying float vGlow;
+  ${PROJECT}
+
+  float easeOutBack(float k) {
+    float c1 = 1.9;
+    float c3 = c1 + 1.0;
+    return 1.0 + c3 * pow(k - 1.0, 3.0) + c1 * pow(k - 1.0, 2.0);
+  }
+
+  void main() {
+    vec3 p = uRot * position;
+    vec2 s = toScreen(p);
+    float age = uTime - aDelay;
+    float pop = age < 0.0 ? 0.0 : (age < 280.0 ? max(0.0, easeOutBack(age / 280.0)) : 1.0);
+    float front = step(0.0, p.z);
+    float depth = front > 0.5 ? 0.6 + 0.4 * p.z : 0.55;
+
+    float waveAge = uTime - uWaveStart;
+    float wave = waveAge >= 0.0 ? waveAge * uWaveSpeed : -1.0;
+    float dist = distance(s, uWaveOrigin);
+    float lit = max(uAllLit, step(dist, wave));
+    float boost = wave > 0.0 && front > 0.5 && waveAge < uWaveLife
+      ? exp(-pow((dist - wave) / 18.0, 2.0))
+      : 0.0;
+
+    float focus = front > 0.5 && (abs(aIndex - uHover) < 0.5 || abs(aIndex - uSelected) < 0.5) ? 1.0 : 0.0;
+    float r = mix(2.1, 1.5, lit) * aSize * pop * depth * uDotScale * (1.0 + 1.1 * boost) * (1.0 + 0.9 * focus);
+    if (r <= 0.1) {
+      gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+      gl_PointSize = 0.0;
+      return;
+    }
+    // Lit dots glow in the lit colour, past their edge by this much.
+    float glow = lit * r * 2.4;
+    vRadius = r * uPixelRatio;
+    vGlow = glow * uPixelRatio;
+    vSize = (r * 2.0 + 2.0 + glow * 2.0) * uPixelRatio;
+    vLit = lit;
+    vAlpha = front > 0.5 ? 1.0 : 0.22;
+    vStroke = front * (1.0 - lit);
+    gl_PointSize = vSize;
+    gl_Position = toClip(s, -p.z * 0.5 - 0.002);
+  }
+`;
+const DOT_FRAGMENT = /* glsl */ `
+  uniform vec3 uLitColor;
+  uniform vec3 uDotColor;
+  uniform vec3 uStrokeColor;
+  uniform float uPixelRatio;
+  uniform float uOpacity;
+  uniform float uPulse;
+  varying float vRadius;
+  varying float vSize;
+  varying float vLit;
+  varying float vAlpha;
+  varying float vStroke;
+  varying float vGlow;
+
+  void main() {
+    float d = length(gl_PointCoord - 0.5) * vSize;
+    float fill = 1.0 - smoothstep(vRadius - 0.6, vRadius + 0.6, d);
+    float halo = vGlow > 0.0
+      ? 0.55 * uPulse * exp(-pow(max(d - vRadius, 0.0) / (vGlow * 0.45), 2.0)) * (1.0 - fill)
+      : 0.0;
+    if (fill <= 0.0 && halo < 0.004) discard;
+    float stroke = 0.5 * uPixelRatio;
+    float ring = smoothstep(vRadius - stroke - 0.5, vRadius - stroke + 0.5, d) * vStroke;
+    vec3 color = vLit > 0.5 ? uLitColor : mix(uDotColor, uStrokeColor, ring);
+    gl_FragColor = vec4(mix(uLitColor, color, fill), (fill + halo) * vAlpha * uOpacity);
+  }
+`;
+
+// ---- globe/aim.js (from when-justice @ juand/share-dialogs-figma, unmodified)
+const D2R = Math.PI / 180;
+/** North pole lean toward the viewer, radians. */
+const DEFAULT_TILT = 0.38;
+// How far the globe may lean to bring a far-north or far-south place up front.
+const MIN_TILT = -1;
+const MAX_TILT = 1;
+const aimClamp = (v, min, max) => Math.min(max, Math.max(min, v));
+/**
+ * Where (lat, lng) sits on the globe's disc for a view, in radii from the
+ * centre: x right, y down (screen space); `z` > 0 faces the viewer.
+ */
+function projectOnGlobe(lat, lng, view) {
+    const phi = lat * D2R;
+    const delta = (lng - view.facingLng) * D2R;
+    const ct = Math.cos(view.tilt);
+    const st = Math.sin(view.tilt);
+    const qx = Math.cos(phi) * Math.sin(delta);
+    const qy = Math.sin(phi);
+    const qz = Math.cos(phi) * Math.cos(delta);
+    return { x: qx, y: -(ct * qy - st * qz), z: st * qy + ct * qz };
+}
+/**
+ * The view that brings (lat, lng) to `target` on the disc (radii, y down).
+ * Tilt is capped, so places near the poles land as close to the target as
+ * that allows, still on the near side.
+ */
+function aimAt(lat, lng, target) {
+    const phi = lat * D2R;
+    const reach = Math.cos(phi) * 0.98;
+    const x = aimClamp(target.x, -reach, reach);
+    const up = -target.y;
+    const z = Math.sqrt(Math.max(0, 1 - x * x - up * up));
+    // Undo the tilt: the place's height before it must equal sin(lat).
+    const tilt = aimClamp(Math.asin(aimClamp(Math.sin(phi) / Math.hypot(up, z), -1, 1)) -
+        Math.atan2(up, z), MIN_TILT, MAX_TILT);
+    // Then spin it sideways onto the target's x, on the near side.
+    const qz = Math.sqrt(Math.max(0, Math.cos(phi) ** 2 - x * x));
+    return { facingLng: lng - Math.atan2(x, qz) / D2R, tilt };
+}
+
+// ---- globe/coastlines.js (from when-justice @ juand/share-dialogs-figma, unmodified)
+const COASTLINES_URL = '/globe/coastlines-50m.bin.gz';
+let cache = null;
+async function inflate(buffer) {
+    const bytes = new Uint8Array(buffer);
+    // Some hosts decode `.gz` on the wire already; only inflate a real gzip stream.
+    if (bytes[0] !== 0x1f || bytes[1] !== 0x8b)
+        return buffer;
+    const stream = new Blob([bytes])
+        .stream()
+        .pipeThrough(new DecompressionStream('gzip'));
+    return new Response(stream).arrayBuffer();
+}
+/** Decodes the file written by `scripts/build-globe-coastlines.mjs`. */
+function decodeCoastlines(buffer) {
+    const view = new DataView(buffer);
+    const count = view.getUint32(0, true);
+    let offset = 4 + count * 4;
+    const arcs = [];
+    for (let i = 0; i < count; i++) {
+        const length = view.getUint32(4 + i * 4, true);
+        const arc = new Float32Array(length * 2);
+        let x = 0;
+        let y = 0;
+        for (let v = 0; v < length; v++) {
+            // int16-wrapped deltas: longitude wraps around the antimeridian for free.
+            x = ((x + view.getInt16(offset, true) + 32768) & 0xffff) - 32768;
+            y = ((y + view.getInt16(offset + 2, true) + 32768) & 0xffff) - 32768;
+            offset += 4;
+            arc[v * 2] = (x / 32767) * 180;
+            arc[v * 2 + 1] = (y / 32767) * 90;
+        }
+        arcs.push(arc);
+    }
+    return arcs;
+}
+function loadCoastlines() {
+    cache ?? (cache = fetch(COASTLINES_URL)
+        .then(response => {
+        if (!response.ok)
+            throw new Error(`Coastlines: ${response.status}`);
+        return response.arrayBuffer();
+    })
+        .then(inflate)
+        .then(decodeCoastlines)
+        .catch(error => {
+        cache = null;
+        throw error;
+    }));
+    return cache;
+}
+
+// ---- globe/globe-engine.js (from when-justice @ juand/share-dialogs-figma, unmodified)
+
+
+
+
+// D2R: same constant as aim.js above
+const SPEED = (Math.PI * 2) / 90000; // one turn every 90 s
+const FRONT_OPACITY = 0.85;
+const BACK_OPACITY = 0.2;
+const WAVE_SPEED = 0.5; // px per ms
+const WAVE_LIFE = 2600;
+const LIMB_SEGMENTS = 256;
+// Stroke widths in CSS px.
+const FRONT_WIDTH = 1;
+const BACK_WIDTH = 0.85;
+const OUTLINE_WIDTH = 1.1;
+// One full fade in and out of the lit dots' glow.
+const PULSE_MS = 2400;
+// Auto-rotation's ramp up to speed once the pin has landed.
+const SPIN_UP = 1500;
+const MAX_FLING = 0.004; // rad per ms
+// Pixel-ratio ladder the frame-rate governor walks down on slow devices.
+const QUALITY = [2, 1.5, 1.25, 1];
+// Radians turned by t: still until the pin lands, then easing up to SPEED.
+const spin = (t) => {
+    const u = Math.max(0, t - TIMELINE.land);
+    return SPEED * (u < SPIN_UP ? (u * u) / (2 * SPIN_UP) : u - SPIN_UP / 2);
+};
+const blend = (top, bottom, alpha) => [
+    top[0] * alpha + bottom[0] * (1 - alpha),
+    top[1] * alpha + bottom[1] * (1 - alpha),
+    top[2] * alpha + bottom[2] * (1 - alpha),
+];
+const colorUniforms = ({ background, ink, dot, lit }) => ({
+    uLitColor: lit,
+    uDotColor: dot,
+    uStrokeColor: blend(ink, dot, 0.25),
+    uBackground: background,
+    uFront: blend(ink, background, FRONT_OPACITY),
+    uBack: blend(ink, background, BACK_OPACITY),
+});
+function seeded(seed) {
+    let s = seed;
+    return () => (s = (s * 16807) % 2147483647) / 2147483647;
+}
+const toUnit = (lat, lng, out, at) => {
+    const phi = lat * D2R;
+    const lambda = lng * D2R;
+    const c = Math.cos(phi);
+    out[at] = c * Math.sin(lambda);
+    out[at + 1] = Math.sin(phi);
+    out[at + 2] = c * Math.cos(lambda);
+};
+/**
+ * Outline globe with donor dots, rendered with three.js. Imperative on
+ * purpose: everything per-frame is a uniform update, so React never re-renders
+ * while it spins. Placement is fully external (`setLayout`), so the same
+ * engine can sit cropped, scaled or centred anywhere.
+ */
+class GlobeEngine {
+    constructor(canvas, options) {
+        this.canvas = canvas;
+        this.options = options;
+        this.scene = new Scene();
+        this.camera = new OrthographicCamera();
+        this.rotation = new Matrix3();
+        this.lines = null;
+        this.dots = null;
+        this.layout = { width: 1, height: 1, cx: 0, cy: 0, radius: 1 };
+        this.positions = new Float32Array(0);
+        this.delays = new Float32Array(0);
+        this.introStart = 0;
+        this.hasIntro = false;
+        this.rot = 0;
+        this.tilt = DEFAULT_TILT;
+        this.lastT = 0;
+        this.raf = 0;
+        this.running = false;
+        // Interaction
+        this.pointer = null;
+        this.velocity = 0;
+        this.autoRotate = 1;
+        this.releasedAt = -Infinity;
+        this.hoverIndex = -1;
+        this.selectedIndex = -1;
+        this.pendingHover = null;
+        // Frame-rate governor
+        this.quality = 0;
+        this.frameTimes = [];
+        this.lastFrame = 0;
+        this.frameCount = 0;
+        this.frame = (now) => {
+            if (!this.running)
+                return;
+            this.raf = requestAnimationFrame(this.frame);
+            const dtFrame = this.lastFrame ? now - this.lastFrame : 16;
+            this.lastFrame = now;
+            this.govern(dtFrame);
+            // The lowest tier idles at ~30 fps while nothing is being touched.
+            if (this.quality >= QUALITY.length - 1 &&
+                !this.pointer &&
+                ++this.frameCount % 2) {
+                return;
+            }
+            const t = this.hasIntro ? now - this.introStart : 0;
+            this.step(t);
+            this.render(t);
+            this.options.onFrame?.(t);
+        };
+        this.onPointerDown = (event) => {
+            if (event.button !== 0)
+                return;
+            const { x, y } = this.local(event);
+            this.pointer = {
+                id: event.pointerId,
+                x,
+                y,
+                startX: x,
+                startY: y,
+                time: performance.now(),
+                type: event.pointerType,
+                dragging: false,
+            };
+            this.velocity = 0;
+        };
+        this.onPointerMove = (event) => {
+            const { x, y } = this.local(event);
+            const p = this.pointer;
+            if (!p || p.id !== event.pointerId) {
+                if (event.pointerType === 'mouse')
+                    this.pendingHover = { x, y };
+                return;
+            }
+            if (!p.dragging && Math.hypot(x - p.startX, y - p.startY) > 6) {
+                p.dragging = true;
+                this.canvas.setPointerCapture(event.pointerId);
+                this.canvas.style.cursor = 'grabbing';
+            }
+            if (!p.dragging)
+                return;
+            const now = performance.now();
+            const dt = Math.max(1, now - p.time);
+            const r = Math.max(60, this.radius);
+            const dRot = (x - p.x) / r;
+            this.rot += dRot;
+            // Touch keeps vertical gestures for page scroll (touch-action: pan-y).
+            if (p.type === 'mouse')
+                this.tilt = clamp(this.tilt + (y - p.y) / r, -0.2, 1);
+            this.velocity = this.velocity * 0.6 + (dRot / dt) * 0.4;
+            p.x = x;
+            p.y = y;
+            p.time = now;
+            this.requestRender();
+        };
+        this.onPointerUp = (event) => {
+            const p = this.pointer;
+            if (!p || p.id !== event.pointerId)
+                return;
+            this.pointer = null;
+            if (p.dragging) {
+                this.releasedAt = this.time();
+                this.canvas.style.cursor = 'grab';
+                // A pause before letting go means no fling; a hard flick is capped.
+                if (performance.now() - p.time > 80)
+                    this.velocity = 0;
+                this.velocity = clamp(this.velocity, -MAX_FLING, MAX_FLING);
+                return;
+            }
+            const { x, y } = this.local(event);
+            const index = this.pick(x, y, p.type === 'mouse' ? 10 : 18);
+            this.setSelected(index);
+            this.options.onSelect?.(index);
+        };
+        this.onPointerCancel = () => {
+            if (this.pointer?.dragging)
+                this.releasedAt = this.time();
+            this.pointer = null;
+        };
+        this.onPointerLeave = () => {
+            this.pendingHover = null;
+            if (this.hoverIndex !== -1) {
+                this.hoverIndex = -1;
+                this.uniforms.uHover.value = -1;
+                this.options.onHover?.(-1);
+            }
+        };
+        this.onContextLost = (event) => {
+            event.preventDefault();
+            this.stop();
+        };
+        this.reducedMotion = Boolean(options.reducedMotion);
+        this.maxPixelRatio = Math.min(window.devicePixelRatio || 1, QUALITY[0]);
+        this.renderer = new WebGLRenderer({
+            canvas,
+            alpha: true,
+            antialias: true,
+            powerPreference: 'low-power',
+            preserveDrawingBuffer: false,
+        });
+        this.renderer.setClearColor(0x000000, 0);
+        this.renderer.setPixelRatio(this.maxPixelRatio);
+        this.uniforms = {
+            uRot: { value: this.rotation },
+            uCenter: { value: [0, 0] },
+            uRadius: { value: 1 },
+            uViewport: { value: [1, 1] },
+            uPixelRatio: { value: this.maxPixelRatio },
+            uTime: { value: 0 },
+            uOpacity: { value: 0 },
+            uWaveStart: { value: TIMELINE.land },
+            uWaveOrigin: { value: [-1e5, -1e5] },
+            uWaveSpeed: { value: WAVE_SPEED },
+            uWaveLife: { value: WAVE_LIFE },
+            uAllLit: { value: 0 },
+            uDotScale: { value: 1 },
+            uHover: { value: -1 },
+            uSelected: { value: -1 },
+            uPulse: { value: 1 },
+            ...Object.fromEntries(Object.entries(colorUniforms(options.colors)).map(([k, v]) => [
+                k,
+                { value: v },
+            ])),
+        };
+        const shared = this.uniforms;
+        this.lineMaterial = new ShaderMaterial({
+            vertexShader: LINE_VERTEX,
+            fragmentShader: LINE_FRAGMENT,
+            // Quads face either way depending on the segment's screen direction.
+            side: DoubleSide,
+            uniforms: {
+                ...shared,
+                uWidth: { value: FRONT_WIDTH },
+                uBackWidth: { value: BACK_WIDTH },
+                uProgress: { value: 0 },
+            },
+        });
+        this.limbMaterial = new ShaderMaterial({
+            vertexShader: LINE_VERTEX,
+            fragmentShader: LINE_FRAGMENT,
+            side: DoubleSide,
+            defines: { LIMB: '' },
+            uniforms: {
+                ...shared,
+                uWidth: { value: OUTLINE_WIDTH },
+                uBackWidth: { value: OUTLINE_WIDTH },
+                uProgress: { value: 0 },
+            },
+        });
+        this.dotMaterial = new ShaderMaterial({
+            vertexShader: DOT_VERTEX,
+            fragmentShader: DOT_FRAGMENT,
+            uniforms: shared,
+            transparent: true,
+            depthWrite: false,
+        });
+        this.limb = this.buildLimb();
+        this.scene.add(this.limb);
+        canvas.addEventListener('webglcontextlost', this.onContextLost);
+        canvas.addEventListener('pointerdown', this.onPointerDown);
+        canvas.addEventListener('pointermove', this.onPointerMove);
+        canvas.addEventListener('pointerup', this.onPointerUp);
+        canvas.addEventListener('pointercancel', this.onPointerCancel);
+        canvas.addEventListener('pointerleave', this.onPointerLeave);
+        this.setView({
+            facingLng: options.facingLng,
+            tilt: options.tilt ?? DEFAULT_TILT,
+        });
+    }
+    /** Mount the coastlines; arcs reveal in 16 staggered groups like the prototype. */
+    setCoastlines(arcs) {
+        let count = 0;
+        for (const arc of arcs)
+            count += arc.length / 2 - 1;
+        const start = new Float32Array(count * 3);
+        const end = new Float32Array(count * 3);
+        const reveal = new Float32Array(count * 2);
+        let s = 0;
+        arcs.forEach((arc, i) => {
+            const length = arc.length / 2;
+            const group = ((i % 16) / 16) * 0.3;
+            for (let k = 0; k < length - 1; k++) {
+                toUnit(arc[k * 2 + 1], arc[k * 2], start, s * 3);
+                toUnit(arc[k * 2 + 3], arc[k * 2 + 2], end, s * 3);
+                reveal[s * 2] = group;
+                reveal[s * 2 + 1] = (k + 1) / length;
+                s++;
+            }
+        });
+        const geometry = this.quadGeometry(count);
+        geometry.setAttribute('aStart', new InstancedBufferAttribute(start, 3));
+        geometry.setAttribute('aEnd', new InstancedBufferAttribute(end, 3));
+        geometry.setAttribute('aReveal', new InstancedBufferAttribute(reveal, 2));
+        this.lines?.geometry.dispose();
+        if (this.lines)
+            this.scene.remove(this.lines);
+        this.lines = new Mesh(geometry, this.lineMaterial);
+        this.lines.frustumCulled = false;
+        this.lines.renderOrder = 0;
+        this.scene.add(this.lines);
+        this.requestRender();
+    }
+    /** Replace the dots. Dots arriving after the intro pop in from now. */
+    setPoints(points) {
+        const n = points.length;
+        const position = new Float32Array(n * 3);
+        const delay = new Float32Array(n);
+        const size = new Float32Array(n);
+        const index = new Float32Array(n);
+        const random = seeded(4812);
+        const now = this.time();
+        points.forEach((p, i) => {
+            toUnit(p.lat, p.lng, position, i * 3);
+            const base = TIMELINE.globe + 600 + random() * 1700;
+            delay[i] = this.hasIntro && now > base ? now + random() * 900 : base;
+            size[i] = 0.8 + random() * 0.5;
+            index[i] = i;
+        });
+        this.positions = position;
+        this.delays = delay;
+        const geometry = new BufferGeometry();
+        geometry.setAttribute('position', new BufferAttribute(position, 3));
+        geometry.setAttribute('aDelay', new BufferAttribute(delay, 1));
+        geometry.setAttribute('aSize', new BufferAttribute(size, 1));
+        geometry.setAttribute('aIndex', new BufferAttribute(index, 1));
+        this.dots?.geometry.dispose();
+        if (this.dots)
+            this.scene.remove(this.dots);
+        this.dots = new Points(geometry, this.dotMaterial);
+        this.dots.frustumCulled = false;
+        this.dots.renderOrder = 2;
+        this.scene.add(this.dots);
+        this.requestRender();
+    }
+    setLayout(layout) {
+        this.layout = layout;
+        this.renderer.setSize(layout.width, layout.height, false);
+        this.uniforms.uViewport.value = [layout.width, layout.height];
+        this.requestRender();
+    }
+    /**
+     * Face `view`; the globe holds it until the pin lands. Ignored once the globe
+     * is on screen, so it never jumps or swings in front of the donor.
+     */
+    setView(view) {
+        const shown = this.hasIntro && this.time() >= TIMELINE.globe;
+        if (shown && !this.reducedMotion)
+            return;
+        this.tilt = view.tilt;
+        this.rot = -view.facingLng * D2R;
+        this.requestRender();
+    }
+    setColors(colors) {
+        for (const [key, value] of Object.entries(colorUniforms(colors))) {
+            this.uniforms[key].value = value;
+        }
+        this.requestRender();
+    }
+    /** Where the orange wave starts, in canvas CSS px. */
+    setWaveOrigin(x, y) {
+        this.uniforms.uWaveOrigin.value = [x, y];
+    }
+    /** Start the intro; `startAt` is a performance.now() timestamp for t = 0. */
+    playIntro(startAt) {
+        this.introStart = startAt;
+        this.hasIntro = true;
+        this.uniforms.uAllLit.value = 0;
+        this.start();
+    }
+    /** Skip straight to the settled state (reduced motion, replays off). */
+    showFinal() {
+        this.introStart = performance.now() - TIMELINE.end;
+        this.hasIntro = true;
+        this.uniforms.uAllLit.value = 1;
+        this.start();
+    }
+    setSelected(index) {
+        this.selectedIndex = index;
+        this.uniforms.uSelected.value = index;
+        this.requestRender();
+    }
+    get selected() {
+        return this.selectedIndex;
+    }
+    /** ms since the intro's t = 0. */
+    time() {
+        return this.hasIntro ? performance.now() - this.introStart : 0;
+    }
+    get pointCount() {
+        return this.delays.length;
+    }
+    /** Current globe radius (it grows in during the intro). */
+    get radius() {
+        return this.layout.radius * globeScaleAt(this.time());
+    }
+    /** Project a dot to canvas CSS px; `z` > 0 means it faces the viewer. */
+    project(index) {
+        const p = this.positions;
+        const e = this.rotation.elements;
+        const x = p[index * 3];
+        const y = p[index * 3 + 1];
+        const z = p[index * 3 + 2];
+        // Matrix3 is column-major.
+        const rx = e[0] * x + e[3] * y + e[6] * z;
+        const ry = e[1] * x + e[4] * y + e[7] * z;
+        const rz = e[2] * x + e[5] * y + e[8] * z;
+        const r = this.radius;
+        return {
+            x: this.layout.cx + rx * r,
+            y: this.layout.cy - ry * r,
+            z: rz,
+            visible: this.time() >= this.delays[index] + 200,
+        };
+    }
+    /** Nearest front-facing dot within `radius` px of a canvas point, or -1. */
+    pick(x, y, radius) {
+        let best = -1;
+        let bestDistance = radius * radius;
+        for (let i = 0; i < this.delays.length; i++) {
+            const p = this.project(i);
+            if (p.z < 0.05 || !p.visible)
+                continue;
+            const d = (p.x - x) ** 2 + (p.y - y) ** 2;
+            if (d < bestDistance) {
+                bestDistance = d;
+                best = i;
+            }
+        }
+        return best;
+    }
+    start() {
+        if (this.running)
+            return;
+        this.running = true;
+        this.lastFrame = 0;
+        this.raf = requestAnimationFrame(this.frame);
+    }
+    stop() {
+        this.running = false;
+        cancelAnimationFrame(this.raf);
+    }
+    dispose() {
+        this.stop();
+        const c = this.canvas;
+        c.removeEventListener('webglcontextlost', this.onContextLost);
+        c.removeEventListener('pointerdown', this.onPointerDown);
+        c.removeEventListener('pointermove', this.onPointerMove);
+        c.removeEventListener('pointerup', this.onPointerUp);
+        c.removeEventListener('pointercancel', this.onPointerCancel);
+        c.removeEventListener('pointerleave', this.onPointerLeave);
+        this.lines?.geometry.dispose();
+        this.dots?.geometry.dispose();
+        this.limb.geometry.dispose();
+        this.lineMaterial.dispose();
+        this.limbMaterial.dispose();
+        this.dotMaterial.dispose();
+        this.renderer.dispose();
+        // Strict Mode mounts twice in dev; free the context instead of waiting on GC.
+        this.renderer.forceContextLoss();
+    }
+    requestRender() {
+        if (!this.running)
+            this.render(this.time());
+    }
+    quadGeometry(instances) {
+        const geometry = new InstancedBufferGeometry();
+        geometry.setAttribute('position', new BufferAttribute(new Float32Array([0, -1, 0, 1, -1, 0, 0, 1, 0, 1, 1, 0]), 3));
+        geometry.setIndex([0, 1, 2, 2, 1, 3]);
+        geometry.instanceCount = instances;
+        return geometry;
+    }
+    buildLimb() {
+        const start = new Float32Array(LIMB_SEGMENTS * 3);
+        const end = new Float32Array(LIMB_SEGMENTS * 3);
+        const reveal = new Float32Array(LIMB_SEGMENTS * 2);
+        // Drawn clockwise from the top, in the shader's y-up space.
+        const at = (i, out, o) => {
+            const a = -Math.PI / 2 + (i / LIMB_SEGMENTS) * Math.PI * 2;
+            out[o] = Math.cos(a);
+            out[o + 1] = -Math.sin(a);
+            out[o + 2] = 0;
+        };
+        for (let i = 0; i < LIMB_SEGMENTS; i++) {
+            at(i, start, i * 3);
+            at(i + 1, end, i * 3);
+            reveal[i * 2 + 1] = (i + 1) / LIMB_SEGMENTS;
+        }
+        const geometry = this.quadGeometry(LIMB_SEGMENTS);
+        geometry.setAttribute('aStart', new InstancedBufferAttribute(start, 3));
+        geometry.setAttribute('aEnd', new InstancedBufferAttribute(end, 3));
+        geometry.setAttribute('aReveal', new InstancedBufferAttribute(reveal, 2));
+        const mesh = new Mesh(geometry, this.limbMaterial);
+        mesh.frustumCulled = false;
+        mesh.renderOrder = 1;
+        return mesh;
+    }
+    step(t) {
+        const dt = Math.min(64, Math.max(0, t - this.lastT));
+        const prev = this.lastT;
+        this.lastT = t;
+        if (this.pointer?.dragging)
+            return;
+        if (!this.reducedMotion) {
+            // Auto-rotation eases back in after the donor lets go.
+            const idle = clamp((t - this.releasedAt - 800) / 1200);
+            this.autoRotate = this.releasedAt === -Infinity ? 1 : idle;
+            this.rot += (spin(t) - spin(prev)) * this.autoRotate;
+        }
+        if (Math.abs(this.velocity) > 1e-6) {
+            this.rot += this.velocity * dt;
+            this.velocity *= Math.exp(-dt / (this.reducedMotion ? 120 : 300));
+        }
+        if (this.pendingHover) {
+            const { x, y } = this.pendingHover;
+            this.pendingHover = null;
+            const index = this.pick(x, y, 10);
+            if (index !== this.hoverIndex) {
+                this.hoverIndex = index;
+                this.uniforms.uHover.value = index;
+                this.canvas.style.cursor = index >= 0 ? 'pointer' : 'grab';
+                this.options.onHover?.(index);
+            }
+        }
+    }
+    render(t) {
+        const u = this.uniforms;
+        const { cx, cy, radius } = this.layout;
+        const r = radius * globeScaleAt(t);
+        const c = Math.cos(this.rot);
+        const s = Math.sin(this.rot);
+        const ct = Math.cos(this.tilt);
+        const st = Math.sin(this.tilt);
+        this.rotation.set(c, 0, s, s * st, ct, -c * st, -s * ct, st, c * ct);
+        const progress = (t - TIMELINE.globe - 100) / 1700;
+        u.uCenter.value = [cx, cy];
+        u.uRadius.value = r;
+        u.uTime.value = t;
+        u.uPulse.value = this.reducedMotion
+            ? 1
+            : 0.5 - 0.5 * Math.cos((t / PULSE_MS) * Math.PI * 2);
+        u.uOpacity.value = easeOutCubic(clamp((t - TIMELINE.globe) / 700));
+        u.uDotScale.value = Math.sqrt(r / 300);
+        u.uPixelRatio.value = this.renderer.getPixelRatio();
+        this.lineMaterial.uniforms.uProgress.value = progress;
+        this.limbMaterial.uniforms.uProgress.value = easeInOutCubic(clamp(progress * 1.25));
+        this.renderer.render(this.scene, this.camera);
+    }
+    govern(dt) {
+        if (document.hidden || this.pointer?.dragging)
+            return;
+        this.frameTimes.push(dt);
+        if (this.frameTimes.length < 90)
+            return;
+        // Skip the first window: shader compile and data upload skew it.
+        const times = this.frameTimes.splice(0);
+        if (performance.now() - this.introStart < 1500)
+            return;
+        const average = times.reduce((a, b) => a + b, 0) / times.length;
+        if (average > 21 && this.quality < QUALITY.length - 1) {
+            this.quality++;
+            const ratio = Math.min(this.maxPixelRatio, QUALITY[this.quality]);
+            this.renderer.setPixelRatio(ratio);
+            this.renderer.setSize(this.layout.width, this.layout.height, false);
+        }
+    }
+    local(event) {
+        const box = this.canvas.getBoundingClientRect();
+        return { x: event.clientX - box.left, y: event.clientY - box.top };
+    }
+}
+
+const RM=matchMedia('(prefers-reduced-motion: reduce)').matches;
+const fmtPin=p=>`No. ${String(p).padStart(5,'0').replace(/\B(?=(\d{3})+(?!\d))/g,',')}`;
+const fmt=n=>Math.round(n).toLocaleString('en-US');
+const COLORS={background:[215/255,207/255,203/255],ink:[0,0,0],dot:[1,1,1],lit:[1,60/255,0]};
+const TOTAL=759, NEXT=760;
+
+/* Example dots shaped like /v2/transactions/donations/globe: city-level, 2-decimal coords, many US towns. */
+let sd=20251113;const rnd=()=>(sd=(sd*16807)%2147483647)/2147483647;
+const gau=()=>{let u=0,v=0;while(!u)u=rnd();while(!v)v=rnd();return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v)};
+const US=[["New York, NY",40.71,-74.0,40],["Los Angeles, CA",34.05,-118.24,30],["Oakland, CA",37.8,-122.27,16],["San Francisco, CA",37.77,-122.42,16],["South Lake Tahoe, CA",38.94,-119.98,8],["San Diego, CA",32.72,-117.16,10],["Sacramento, CA",38.58,-121.49,7],["Seattle, WA",47.61,-122.33,10],["Portland, OR",45.52,-122.68,9],["Boise, ID",43.62,-116.2,3],["Denver, CO",39.74,-104.99,9],["Salt Lake City, UT",40.76,-111.89,4],["Phoenix, AZ",33.45,-112.07,7],["Tucson, AZ",32.22,-110.97,3],["Albuquerque, NM",35.08,-106.65,3],["Austin, TX",30.27,-97.74,10],["Houston, TX",29.76,-95.37,10],["Dallas, TX",32.78,-96.8,8],["San Antonio, TX",29.42,-98.49,5],["Moore, OK",35.34,-97.49,3],["Tulsa, OK",36.15,-95.99,2],["Kansas City, MO",39.1,-94.58,4],["St. Louis, MO",38.63,-90.2,4],["Minneapolis, MN",44.98,-93.27,6],["Madison, WI",43.07,-89.4,3],["Chicago, IL",41.88,-87.63,14],["Detroit, MI",42.33,-83.05,6],["Ann Arbor, MI",42.28,-83.74,3],["Cleveland, OH",41.5,-81.69,4],["Columbus, OH",39.96,-83.0,4],["Pittsburgh, PA",40.44,-79.99,5],["Philadelphia, PA",39.95,-75.17,9],["Baltimore, MD",39.29,-76.61,5],["Washington, DC",38.91,-77.04,12],["Richmond, VA",37.54,-77.44,4],["Raleigh, NC",35.78,-78.64,5],["Asheville, NC",35.6,-82.55,3],["Charlotte, NC",35.23,-80.84,4],["Atlanta, GA",33.75,-84.39,8],["Nashville, TN",36.16,-86.78,5],["Memphis, TN",35.15,-90.05,3],["New Orleans, LA",29.95,-90.07,6],["Baton Rouge, LA",30.45,-91.19,3],["Birmingham, AL",33.52,-86.8,3],["Tampa, FL",27.95,-82.46,6],["Miami, FL",25.76,-80.19,9],["Orlando, FL",28.54,-81.38,5],["Edgewater, FL",28.99,-80.9,2],["Tallahassee, FL",30.44,-84.28,2],["Jacksonville, FL",30.33,-81.66,4],["Boston, MA",42.36,-71.06,11],["Providence, RI",41.82,-71.41,3],["Burlington, VT",44.48,-73.21,2],["Portland, ME",43.66,-70.26,2],["Schenectady, NY",42.81,-73.94,3],["Buffalo, NY",42.89,-78.88,3],["Hartford, CT",41.76,-72.67,3],["Newark, NJ",40.74,-74.17,5],["Indianapolis, IN",39.77,-86.16,4],["Louisville, KY",38.25,-85.76,3],["Omaha, NE",41.26,-95.94,2],["Des Moines, IA",41.59,-93.62,2],["Las Vegas, NV",36.17,-115.14,4],["Reno, NV",39.53,-119.81,3],["Anchorage, AK",61.22,-149.9,1],["Honolulu, HI",21.31,-157.86,2],["Flint, MI",43.01,-83.69,2],["Charleston, SC",32.78,-79.93,3]];
+const WORLD=[["Toronto, Canada",43.65,-79.38,4],["Vancouver, Canada",49.28,-123.12,3],["Montreal, Canada",45.5,-73.57,2],["Mexico City, Mexico",19.43,-99.13,4],["Guadalajara, Mexico",20.66,-103.35,2],["Bogotá, Colombia",4.71,-74.07,4],["Medellín, Colombia",6.24,-75.58,3],["Cali, Colombia",3.44,-76.52,2],["Lima, Peru",-12.05,-77.04,2],["Santiago, Chile",-33.45,-70.67,2],["Buenos Aires, Argentina",-34.6,-58.38,2],["São Paulo, Brazil",-23.55,-46.63,3],["San Juan, Puerto Rico",18.47,-66.11,2],["London, UK",51.51,-.13,5],["Dublin, Ireland",53.35,-6.26,2],["Lisbon, Portugal",38.72,-9.14,2],["Madrid, Spain",40.42,-3.7,3],["Barcelona, Spain",41.39,2.17,2],["Paris, France",48.86,2.35,3],["Amsterdam, Netherlands",52.37,4.9,2],["Berlin, Germany",52.52,13.4,2],["Rome, Italy",41.9,12.5,2],["Stockholm, Sweden",59.33,18.07,1],["Athens, Greece",37.98,23.73,1],["Lagos, Nigeria",6.52,3.38,1],["Nairobi, Kenya",-1.29,36.82,2],["Cape Town, South Africa",-33.92,18.42,1],["Mumbai, India",19.08,72.88,2],["Delhi, India",28.61,77.21,1],["Bangkok, Thailand",13.75,100.5,1],["Manila, Philippines",14.6,120.98,1],["Tokyo, Japan",35.68,139.69,2],["Seoul, South Korea",37.57,126.98,1],["Sydney, Australia",-33.87,151.21,3],["Melbourne, Australia",-37.81,144.96,2],["Auckland, New Zealand",-36.85,174.76,1]];
+const pick=list=>{let s=0;for(const c of list)s+=c[3];let r=rnd()*s;for(const c of list){r-=c[3];if(r<=0)return c}return list[0]};
+const pins=Array.from({length:TOTAL},(_,i)=>i+1);for(let i=pins.length-1;i>0;i--){const j=Math.floor(rnd()*(i+1));[pins[i],pins[j]]=[pins[j],pins[i]]}
+const DOTS=pins.slice(0,686).sort((a,b)=>a-b).map(pin=>{const c=rnd()<.83?pick(US):pick(WORLD);const s=c[3]>8?.45:.3;return{lat:+(c[1]+gau()*s).toFixed(2),lng:+(c[2]+gau()*s*1.2).toFixed(2),pin,place:c[0]}});
+const CASES={tahoe:{lat:39.05,lng:-120.04,place:'Lake Tahoe, CA',line:'$100K to a plaintiff drove AT&T to remove 107,000 lbs of toxic lead cables from Lake Tahoe.'},bay:{lat:37.45,lng:-121.95,place:'San Francisco Bay, CA',line:'A $70B waste corporation agreed to landfill improvements and cleanup near San Francisco Bay.'}};
+const CITY={"Moore, OK":[35.34,-97.49],"New York, NY":[40.71,-74.0],"Austin, TX":[30.27,-97.74],"Oakland, CA":[37.8,-122.27],"London, UK":[51.51,-.13],"Bogotá, Colombia":[4.71,-74.07]};
+
+/* coastlines: the same coastlines-50m.bin.gz the site serves */
+const ARCS=await fetch('coastlines-50m.gz.b64.txt').then(r=>r.text()).then(b=>{const s=atob(b.trim()),u=new Uint8Array(s.length);for(let i=0;i<s.length;i++)u[i]=s.charCodeAt(i);return u.buffer}).then(inflate).then(decodeCoastlines);
+
+/* ===================================================================== globe wrapper
+   Mirrors donor-globe.tsx: engine + wave ring + ambient pin tags + selected tag. Nothing in the engine is changed. */
+const D2Rx=Math.PI/180;
+function makeGlobe(host,o){
+  const root=document.createElement('div');root.className='g-root';host.appendChild(root);
+  const canvas=document.createElement('canvas');canvas.className='g-canvas';canvas.setAttribute('role','img');canvas.setAttribute('aria-label','Globe of Earthlings. Drag to spin it, select a dot to see its pin.');root.appendChild(canvas);
+  const ns='http://www.w3.org/2000/svg',svg=document.createElementNS(ns,'svg');svg.setAttribute('class','g-ov');svg.setAttribute('aria-hidden','true');
+  const cid='c'+Math.random().toString(36).slice(2);svg.innerHTML=`<clipPath id="${cid}"><circle/></clipPath><circle class="g-wave" clip-path="url(#${cid})"/>`;root.appendChild(svg);
+  const clip=svg.querySelector('clipPath circle'),ring=svg.querySelector('.g-wave');
+  const mkTag=(sel)=>{const e=document.createElement('div');e.className='tag'+(sel?' sel':'');e.setAttribute('aria-hidden','true');e.innerHTML=`<span class="box"><span class="lb"></span>${sel?'<span class="pl"></span>':''}</span>`;root.appendChild(e);return e};
+  const amb=[0,1,2,3].map(()=>mkTag(false)),selTag=mkTag(true),marks=[];
+  let dots=o.dots.slice(),L={width:1,height:1,cx:0,cy:0,radius:1},state=Array(4).fill(null),nextTag=0,waveT0=TIMELINE.land,waveO=[0,0],tween=null,alive=true,hook=null,ambientOn=o.ambient!==false;
+  const api={dots,onSelect:null};
+  const engine=new GlobeEngine(canvas,{colors:COLORS,facingLng:o.view.facingLng,tilt:o.view.tilt??DEFAULT_TILT,reducedMotion:RM,onFrame:t=>frame(t),onSelect:i=>{showSel(i);api.onSelect&&api.onSelect(i)}});
+  const compact=()=>L.width<720;
+  const layout=()=>{const b=host.getBoundingClientRect();if(!b.width||!b.height)return;const l=o.layout(b.width,b.height);L={width:b.width,height:b.height,cx:l.cx,cy:l.cy,radius:l.radius};engine.setLayout(L);if(o.wave){waveO=o.wave(b.width,b.height,L);if(engine.time()<TIMELINE.land+50)engine.setWaveOrigin(...waveO)}[...amb,selTag,...marks.map(m=>m.el)].forEach(e=>e.classList.toggle('compact',compact()&&!e.classList.contains('sel')))};
+  const ro=new ResizeObserver(layout);ro.observe(host);layout();
+  engine.setCoastlines(ARCS);engine.setPoints(dots);
+  if(o.waveO)waveO=o.waveO;
+  if(RM)engine.showFinal();else engine.playIntro(performance.now());
+  requestAnimationFrame(()=>root.classList.add('ready'));
+  // visibility: only spend frames on screen (as the original does)
+  const io=new IntersectionObserver(([e])=>{if(!alive)return;e.isIntersecting?engine.start():engine.stop()});io.observe(root);
+  const clampv=(v,a=0,b=1)=>Math.min(b,Math.max(a,v));
+  function place(el,p,life,sel,minY){const alpha=p.z<0.1||p.y<minY||p.y>L.height-4?0:life*clampv((p.z-0.1)/0.2);el.style.opacity=alpha.toFixed(3);el.style.transform=`translate3d(${p.x.toFixed(1)}px,${p.y.toFixed(1)}px,0)`;const box=el.firstElementChild,half=box.offsetWidth/2;el.style.setProperty('--shift',(clampv(p.x,half+4,L.width-half-4)-p.x).toFixed(1)+'px');el.style.setProperty('--rise',(sel?4:4)+'px')}
+  function frame(t){
+    if(tween){const k=clampv((performance.now()-tween.s)/tween.d);const e=easeInOutCubic(k);engine.rot=tween.r0+(tween.r1-tween.r0)*e;engine.tilt=tween.t0+(tween.t1-tween.t0)*e;engine.releasedAt=engine.time();engine.velocity=0;if(k>=1)tween=null}
+    if(hook)hook(t);
+    const minY=o.tagMinY?o.tagMinY(L):-Infinity;
+    if(ambientOn&&!RM&&t>=TIMELINE.land+900&&engine.pointCount&&t>=nextTag){spawn(t,minY);nextTag=t+180+Math.random()*520}
+    for(let s=0;s<4;s++){const st=state[s];if(st&&t-st.born>=1500)state[s]=null;const lv=state[s];if(lv){const age=t-lv.born;place(amb[s],engine.project(lv.index),Math.min(clampv(age/160),clampv((1500-age)/220)),false,minY)}else amb[s].style.opacity='0'}
+    if(engine.selected>=0)place(selTag,engine.project(engine.selected),1,true,-Infinity);else selTag.style.opacity='0';
+    marks.forEach(m=>place(m.el,screenOf(m.lat,m.lng),1,true,-Infinity));
+    clip.setAttribute('cx',L.cx);clip.setAttribute('cy',L.cy);clip.setAttribute('r',engine.radius);
+    const age=t-waveT0,live=age>0&&age<2600&&!RM;ring.setAttribute('cx',waveO[0]);ring.setAttribute('cy',waveO[1]);ring.style.opacity=live?(0.45*(1-age/2600)).toFixed(3):'0';if(live)ring.setAttribute('r',age*0.5);
+  }
+  function spawn(t,minY){const slot=state.findIndex(g=>!g);if(slot<0)return;const used=state.filter(Boolean);for(let a=0;a<40;a++){const i=Math.floor(Math.random()*engine.pointCount);if(i===engine.selected)continue;const p=engine.project(i);if(p.z<=0.35||!p.visible)continue;if(p.y<minY+24||p.y>L.height-12)continue;if(used.some(g=>{const q=engine.project(g.index);return g.index===i||Math.hypot(p.x-q.x,p.y-q.y)<90}))continue;state[slot]={index:i,born:t};const d=dots[i];amb[slot].querySelector('.lb').textContent=d&&d.pin!=null?fmtPin(d.pin):'Earthling';return}}
+  function showSel(i){if(i<0)return;const d=dots[i];selTag.querySelector('.lb').textContent=d&&d.pin!=null?fmtPin(d.pin):'Earthling';selTag.querySelector('.pl').textContent=d?.place??''}
+  function screenOf(lat,lng){const u=new Float32Array(3);const phi=lat*D2Rx,la=lng*D2Rx,c=Math.cos(phi);const x=c*Math.sin(la),y=Math.sin(phi),z=c*Math.cos(la);const e=engine.rotation.elements;const rx=e[0]*x+e[3]*y+e[6]*z,ry=e[1]*x+e[4]*y+e[7]*z,rz=e[2]*x+e[5]*y+e[8]*z;const r=engine.radius;return{x:L.cx+rx*r,y:L.cy-ry*r,z:rz}}
+  function latLngAt(x,y){const r=engine.radius,rx=(x-L.cx)/r,ry=-(y-L.cy)/r,q=rx*rx+ry*ry;if(q>=1)return null;const rz=Math.sqrt(1-q),e=engine.rotation.elements;const px=e[0]*rx+e[1]*ry+e[2]*rz,py=e[3]*rx+e[4]*ry+e[5]*rz,pz=e[6]*rx+e[7]*ry+e[8]*rz;return{lat:+(Math.asin(Math.max(-1,Math.min(1,py)))/D2Rx).toFixed(2),lng:+(Math.atan2(px,pz)/D2Rx).toFixed(2)}}
+  Object.assign(api,{engine,
+    get L(){return L},
+    time:()=>engine.time(),
+    hook:f=>{hook=f},
+    ambient:on=>{ambientOn=on},
+    select:i=>{engine.setSelected(i);showSel(i)},
+    wave:(x,y)=>{const u=engine.uniforms;u.uWaveOrigin.value=[x,y];u.uWaveStart.value=engine.time();u.uAllLit.value=0;waveT0=engine.time();waveO=[x,y]},
+    addDot:d=>{const oldD=Float32Array.from(engine.delays),oldS=engine.dots?Float32Array.from(engine.dots.geometry.attributes.aSize.array):null;dots.push(d);engine.setPoints(dots);const D=engine.delays,S=engine.dots.geometry.attributes.aSize.array;for(let i=0;i<oldD.length;i++){D[i]=oldD[i];if(oldS)S[i]=oldS[i]}D[dots.length-1]=engine.time();engine.dots.geometry.attributes.aDelay.needsUpdate=true;engine.dots.geometry.attributes.aSize.needsUpdate=true;return dots.length-1},
+    setDots:list=>{dots=list.slice();api.dots=dots;engine.setSelected(-1);state=Array(4).fill(null);engine.setPoints(dots)},
+    delays:(fn)=>{const D=engine.delays;for(let i=0;i<D.length;i++){const v=fn(i,D[i]);if(v!==undefined)D[i]=v}engine.dots.geometry.attributes.aDelay.needsUpdate=true},
+    aim:(lat,lng,target={x:0,y:0},d=1100)=>{const v=aimAt(lat,lng,target);let r1=-v.facingLng*D2Rx;const r0=engine.rot;r1+=Math.round((r0-r1)/(2*Math.PI))*2*Math.PI;tween={s:performance.now(),d:RM?1:d,r0,r1,t0:engine.tilt,t1:v.tilt};engine.start()},
+    hold:()=>{engine.releasedAt=engine.time();engine.velocity=0},
+    mark:(lat,lng,label,pl)=>{const el=mkTag(true);el.querySelector('.lb').textContent=label;el.querySelector('.pl').textContent=pl||'';marks.push({el,lat,lng});return el},
+    clearMarks:()=>{marks.splice(0).forEach(m=>m.el.remove())},
+    screenOf,latLngAt,layout,
+    destroy:()=>{alive=false;io.disconnect();ro.disconnect();engine.dispose();root.remove()}});
+  return api;
+}
+
+
+/* ============ demo del portafolio: el intro del thank-you con puntos de ejemplo ============ */
+const EN = new URLSearchParams(location.search).get('lang') === 'en';
+document.documentElement.lang = EN ? 'en' : 'es';
+document.getElementById('hint').textContent = EN ? 'Drag to spin · tap a dot to see its pin · example dots' : 'Arrastra para girar · toca un punto para ver su pin · puntos de ejemplo';
+const btn = document.getElementById('replay'); btn.textContent = EN ? 'Replay' : 'Repetir';
+const LAND = { x: -0.12, y: -0.28 };                  // dónde aterriza el pin, en radios desde el centro
+const HOME = { lat: 25.76, lng: -80.19 };             // ciudad de ejemplo del nuevo Earthling
+const VIEW = aimAt(HOME.lat, HOME.lng, LAND);
+const lay = (w, h) => { const R = Math.min(w * 0.46, h * 0.42); return { cx: w / 2, cy: h * 0.47, radius: R }; };
+const host = document.getElementById('g');
+const g = makeGlobe(host, { dots: DOTS, view: VIEW, layout: lay, wave: (w, h, L) => [L.cx + L.radius * LAND.x, L.cy + L.radius * LAND.y] });
+const flyer = document.getElementById('flyer'), coin = document.getElementById('coin');
+let raf = 0;
+function play() {
+  cancelAnimationFrame(raf);
+  if (RM) { g.engine.showFinal(); flyer.style.opacity = '0'; return; }
+  const t0 = performance.now();
+  g.engine.playIntro(t0);
+  const frame = (now) => {
+    const t = now - t0, L = g.L;
+    if (t > TIMELINE.land + 80) { flyer.style.opacity = '0'; return; }
+    raf = requestAnimationFrame(frame);
+    const size = Math.min(L.width, L.height) * 0.46, half = size / 2;
+    const rad = L.radius * globeScaleAt(t);
+    const tx = L.cx + rad * LAND.x, ty = L.cy + rad * LAND.y;
+    const travel = (t - TIMELINE.pinShrink) / (TIMELINE.land - TIMELINE.pinShrink);
+    const kIn = easeOutCubic(clamp(t / TIMELINE.pinIn)), kMove = easeInOutCubic(clamp(travel)), kShrink = easeInCubic(clamp(travel));
+    const x = lerp(L.cx, tx, kMove), y = lerp(L.cy, ty, kMove) - (1 - kIn) * 48;
+    const scale = (1.04 - 0.04 * kIn) * (1 - 0.965 * kShrink);
+    const angle = 4 * 360 * easeInQuad(clamp((t - 500) / (TIMELINE.land - 500)));
+    const fade = 1 - clamp((t - (TIMELINE.land - 140)) / 160);
+    flyer.style.width = flyer.style.height = size + 'px';
+    flyer.style.opacity = (kIn * fade).toFixed(3);
+    flyer.style.transform = `translate3d(${(x - half).toFixed(1)}px, ${(y - half).toFixed(1)}px, 0) scale(${scale.toFixed(4)})`;
+    coin.style.transform = `perspective(${size * 3}px) rotateY(${angle.toFixed(2)}deg)`;
+  };
+  raf = requestAnimationFrame(frame);
+}
+btn.addEventListener('click', play);
+// arranca la primera vez que el globo entra en pantalla
+let started = false;
+new IntersectionObserver(([e]) => { if (e.isIntersecting && !started) { started = true; play(); } }, { threshold: 0.4 }).observe(host);
+</script>
+</body>
+</html>
